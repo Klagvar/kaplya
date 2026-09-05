@@ -262,18 +262,18 @@
       ru: 'Чутьё', en: 'Instinct',
       ruSub: 'жемчужина ловится издалека', enSub: 'pearls collect from farther' },
 
-    { key: 'edge', max: 1, cost: [320],
+    { key: 'edge', max: 1, cost: [320], ads: 3,
       ru: 'Прилипание', en: 'Cling',
-      ruSub: 'капля у стены растёт вдоль неё', enSub: 'drops near walls grow along them' },
-    { key: 'spare', max: 1, cost: [400],
+      ruSub: 'у стены растёт вдоль неё', enSub: 'grows along walls' },
+    { key: 'spare', max: 1, cost: [400], ads: 4,
       ru: 'Запасная', en: 'Spare',
-      ruSub: 'первая потеря за уровень бесплатна', enSub: 'first loss each level is free' },
-    { key: 'magnet', max: 1, cost: [260],
+      ruSub: 'первая потеря бесплатна', enSub: 'first loss is free' },
+    { key: 'magnet', max: 1, cost: [260], ads: 2,
       ru: 'Притяжение', en: 'Pull',
       ruSub: 'жемчужины плывут к каплям', enSub: 'pearls drift toward your drops' },
-    { key: 'radar', max: 1, cost: [300],
+    { key: 'radar', max: 1, cost: [300], ads: 3,
       ru: 'Предчувствие', en: 'Foresight',
-      ruSub: 'видно, куда уголь придёт через секунду', enSub: 'shows where embers will be' }
+      ruSub: 'видно, куда летит уголь', enSub: 'shows where embers go' }
   ];
 
   /* --- Состояние ------------------------------------------------------ */
@@ -318,6 +318,7 @@
   var runSeen = {};
   var adOffer = false;     // предложение продолжения уже засчитано
   var adBusy = false;      // ролик заказан, второй раз не заказываем
+  var adWaitKey = '';      // за какую прокачку идёт ролик из лавки
 
   var flash = 0;           // вспышка «уровень пройден»
   var flashText = '';
@@ -330,6 +331,8 @@
   var save = {
     best: 0, bestLevel: 1, coins: 0, skin: 0, owned: [1, 0, 0, 0, 0],
     up: { life: 0, size: 0, calm: 0, pearl: 0, edge: 0, spare: 0, magnet: 0, radar: 0 },
+    // Сколько роликов уже просмотрено в счёт каждой дорогой прокачки.
+    adProg: {},
     sound: 1, runs: 0, seen: {}
   };
 
@@ -1024,12 +1027,61 @@
   function onLateReward() {
     A.event('ad', adInfo('reward', 'late', 1));
     A.flush(false);
+    // Ролик заказывали из лавки — награда идёт туда, а не в продолжение.
+    if (adWaitKey) { creditUpgradeAd(adWaitKey); return; }
     if (state === 'dead' && !continueUsed) {
       revive();
       return;
     }
     var bonus = runCoins > 0 ? runCoins : 1;
     save.coins += bonus;
+    S.reward();
+    persist();
+  }
+
+  /* Просмотр ролика в счёт дорогой прокачки. Отказ площадки не должен
+     стоить игроку ничего: не засчитался — счётчик на месте, попробует ещё.
+     Запоздавшая награда учитывается тоже, через onLateAd. */
+  function watchForUpgrade(u) {
+    if (adBusy) return;
+    adBusy = true;
+    adWaitKey = u.key;
+    hintText = T.t('adWait');
+    hintTime = 4;
+    P.showRewarded().then(function (ok) {
+      adBusy = false;
+      A.event('ad', adInfo('reward', 'shop', ok));
+      A.flush(false);
+      if (!ok) {
+        adWaitKey = '';
+        hintText = T.t('adFailed');
+        hintTime = 2.4;
+        return;
+      }
+      creditUpgradeAd(u.key);
+    }).catch(function () {
+      adBusy = false;
+      adWaitKey = '';
+    });
+  }
+
+  function creditUpgradeAd(key) {
+    var u = null;
+    for (var i = 0; i < UPGRADES.length; i++) {
+      if (UPGRADES[i].key === key) u = UPGRADES[i];
+    }
+    if (!u || !u.ads) return;
+    adWaitKey = '';
+    var done = (save.adProg[key] || 0) + 1;
+    if (done >= u.ads) {
+      save.adProg[key] = 0;
+      save.up[key] = upLvl(key) + 1;
+      hintText = (T.dict === DICT.ru ? u.ru : u.en) + ' — ' + T.t('equipped');
+    } else {
+      save.adProg[key] = done;
+      hintText = '▶ ' + done + '/' + u.ads;
+    }
+    hintTime = 2.4;
     S.reward();
     persist();
   }
@@ -2013,8 +2065,14 @@
     // Одна rewarded-кнопка и только пока площадка подтверждает наличие
     // ролика: без проверки игрок жмёт, ждёт и получает «награда не
     // засчитана». rewardedReady приходит от адаптера площадки.
+    /* Кнопку показываем всегда, когда мост есть. Раньше её прятала проверка
+       наличия ролика — и по живым данным именно она её и прятала: ВК
+       отвечает «инвентаря нет» (rew: 0) даже там, где межэкранная реклама
+       показывается прекрасно. Верить этой проверке нельзя, а отказ у нас
+       теперь обрабатывается мягко: игрок увидит «награда не засчитана», и
+       если ролик всё-таки приедет позже — награда придёт следом. */
     var y = top + 168 * us;
-    if (P.available && P.rewardedReady && !continueUsed) {
+    if (P.available && !continueUsed) {
       button(cx, '▶ ' + T.t('continueAd'), T.t('forAd'), mid, y, 250, 58, '#ffd166', doContinue);
       y += 74 * us;
       /* Экран рисуется каждый кадр, поэтому предложение засчитываем один раз
@@ -2091,14 +2149,24 @@
             15, '#ffffff', 'left', 700);
           text(cx, T.dict === DICT.ru ? u.ruSub : u.enSub, box.bx + 16 * us, y + 9 * us,
             11, p.dim, 'left', 500);
-          drawPips(cx, p, box.bx + rowW - 76 * us, y - 10 * us, have, u.max);
+          /* У дорогих прокачек вторая цена — в просмотрах рекламы. Копить
+             на них монетами долго, а смотреть ролик игрок готов ровно
+             тогда, когда точно знает, за что: за конкретную вещь, до
+             которой видно, сколько осталось. Счётчик и есть эта видимость. */
+          var adsNeed = u.ads || 0;
+          var adsDone = adsNeed ? (save.adProg[u.key] || 0) : 0;
+          var adW = adsNeed ? 62 * us : 0;
+
+          drawPips(cx, p, box.bx + rowW - 76 * us - adW, y - 10 * us, have, u.max);
           text(cx, full ? T.t('maxed') : '◈ ' + cost,
-            box.bx + rowW - 16 * us, y + 9 * us, 12,
+            box.bx + rowW - 16 * us - adW, y + 9 * us, 12,
             full ? p.dim : (can ? '#ffffff' : 'rgba(255,255,255,0.4)'), 'right', 700);
 
           if (full) return;
+
+          var coinW = rowW - adW;
           buttons.push({
-            x: box.bx, y: y - box.rh / 2, w: rowW, h: box.rh,
+            x: box.bx, y: y - box.rh / 2, w: coinW, h: box.rh,
             action: function () {
               if (save.coins < cost) {
                 S.tone({ freq: 160, dur: 0.12, type: 'square', gain: 0.2 });
@@ -2109,6 +2177,21 @@
               S.reward();
               persist();
             }
+          });
+
+          if (!adsNeed) return;
+
+          // Вторая половина строки — «посмотреть ролик».
+          var ax = box.bx + rowW - adW, ah = box.rh - 8 * us;
+          cx.save();
+          glass(cx, ax, y - ah / 2, adW - 8 * us, ah, ah / 2, { film: 0.4 });
+          cx.restore();
+          text(cx, '▶ ' + adsDone + '/' + adsNeed, ax + (adW - 8 * us) / 2, y,
+            12, '#ffffff', 'center', 800);
+
+          buttons.push({
+            x: ax, y: y - ah / 2, w: adW - 8 * us, h: ah,
+            action: function () { watchForUpgrade(u); }
           });
         })(i);
       }
@@ -2337,6 +2420,7 @@
     }
     owned[0] = 1;
     save.owned = owned;
+    save.adProg = (data.adProg && typeof data.adProg === 'object') ? data.adProg : {};
     save.skin = (data.skin >= 0 && data.skin < SKINS.length && owned[data.skin]) ? data.skin : 0;
 
     // Прокачку тоже не принимаем на веру: уровни клампим по потолку.
