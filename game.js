@@ -61,6 +61,8 @@
       again: 'Ещё раз',
       continueAd: 'Продолжить',
       forAd: 'за рекламу',
+      adWait: 'Загружаем рекламу…',
+      adFailed: 'Реклама не показалась',
       level: 'Уровень',
       loading: 'Загрузка…',
       sound: 'Звук',
@@ -98,6 +100,8 @@
       again: 'Retry',
       continueAd: 'Continue',
       forAd: 'for an ad',
+      adWait: 'Loading ad…',
+      adFailed: 'No ad available',
       level: 'Level',
       loading: 'Loading…',
       sound: 'Sound',
@@ -249,16 +253,16 @@
      Отсюда разрыв в разы, а не в проценты: от 320 до 400 против 25–40 за
      первый шаг обычной прокачки. */
   var UPGRADES = [
-    { key: 'life', max: 3, cost: [30, 80, 170],
+    { key: 'life', max: 3, cost: [30, 80, 170], ads: 1,
       ru: 'Живучесть', en: 'Vitality',
       ruSub: '+1 жизнь в начале забега', enSub: '+1 starting life' },
-    { key: 'size', max: 3, cost: [25, 70, 150],
+    { key: 'size', max: 3, cost: [25, 70, 150], ads: 1,
       ru: 'Натяжение', en: 'Tension',
       ruSub: 'капля вырастает крупнее', enSub: 'drops grow larger' },
-    { key: 'calm', max: 3, cost: [30, 85, 175],
+    { key: 'calm', max: 3, cost: [30, 85, 175], ads: 1,
       ru: 'Напор', en: 'Surge',
       ruSub: 'капля растёт быстрее', enSub: 'drops grow faster' },
-    { key: 'pearl', max: 2, cost: [40, 110],
+    { key: 'pearl', max: 2, cost: [40, 110], ads: 1,
       ru: 'Чутьё', en: 'Instinct',
       ruSub: 'жемчужина ловится издалека', enSub: 'pearls collect from farther' },
 
@@ -319,6 +323,8 @@
   var adOffer = false;     // предложение продолжения уже засчитано
   var adBusy = false;      // ролик заказан, второй раз не заказываем
   var adWaitKey = '';      // за какую прокачку идёт ролик из лавки
+  var adNote = '';         // ответ на нажатие кнопки рекламы
+  var adNoteTime = 0;
 
   var flash = 0;           // вспышка «уровень пройден»
   var flashText = '';
@@ -1097,15 +1103,29 @@
        Взамен нужен свой замок от повторного нажатия, пока крутится ролик,
        иначе нетерпеливый игрок закажет показ дважды. */
     adBusy = true;
+    /* Без этих трёх строк кнопка молчала. Площадка отвечает «инвентаря
+       нет» почти мгновенно, игра просто ничего не делала, и нажатие
+       выглядело как неработающая кнопка. Молчащая кнопка хуже честного
+       отказа: игрок решает, что сломана вся игра. */
+    S.click();
+    adNote = T.t('adWait');
+    adNoteTime = 4;
     P.showRewarded().then(function (ok) {
       adBusy = false;
       A.event('ad', adInfo('reward', 'continue', ok));
       A.flush(false);
-      if (!ok) return;
+      if (!ok) {
+        adNote = T.t('adFailed');
+        adNoteTime = 2.4;
+        return;
+      }
+      adNoteTime = 0;
       revive();
     }).catch(function () {
       // Что бы ни случилось с показом, экран смерти должен остаться живым.
       adBusy = false;
+      adNote = T.t('adFailed');
+      adNoteTime = 2.4;
     });
   }
 
@@ -1317,6 +1337,7 @@
     if (flash > 0) flash = Math.max(0, flash - dt * 1.6);
     if (shake > 0) shake = Math.max(0, shake - dt * 3);
     if (hintTime > 0) hintTime = Math.max(0, hintTime - dt);
+    if (adNoteTime > 0) adNoteTime = Math.max(0, adNoteTime - dt);
 
     var i;
     for (i = parts.length - 1; i >= 0; i--) {
@@ -2083,6 +2104,10 @@
         A.event('ad_offer', { s: 'continue', dev: P.deviceType || '?' });
       }
     }
+    if (adNoteTime > 0) {
+      text(cx, adNote, mid, y - 26 * us, 12,
+        'rgba(255,255,255,' + Math.min(1, adNoteTime).toFixed(2) + ')', 'center', 700);
+    }
     button(cx, T.t('again'), null, mid, y, 200, 52, p.accent, startRun);
     button(cx, T.t('shop'), null, mid, y + 64 * us, 150, 42,
       hsla(p.h, 60, 62, 0.35), function () { S.click(); state = 'shop'; });
@@ -2149,24 +2174,39 @@
             15, '#ffffff', 'left', 700);
           text(cx, T.dict === DICT.ru ? u.ruSub : u.enSub, box.bx + 16 * us, y + 9 * us,
             11, p.dim, 'left', 500);
-          /* У дорогих прокачек вторая цена — в просмотрах рекламы. Копить
-             на них монетами долго, а смотреть ролик игрок готов ровно
-             тогда, когда точно знает, за что: за конкретную вещь, до
-             которой видно, сколько осталось. Счётчик и есть эта видимость. */
+          /* Две цены и две кнопки. Раньше вся строка была одной кнопкой
+             покупки за монеты, а справа висел счётчик роликов — и читалось
+             это как «купить можно только за рекламу». Теперь обе цены
+             видно и обе нажимаются: монеты гаснут, когда их не хватает,
+             реклама остаётся активной всегда. Игрок сам решает, чем
+             платить, и это решение видно с первого взгляда. */
           var adsNeed = u.ads || 0;
           var adsDone = adsNeed ? (save.adProg[u.key] || 0) : 0;
-          var adW = adsNeed ? 62 * us : 0;
 
-          drawPips(cx, p, box.bx + rowW - 76 * us - adW, y - 10 * us, have, u.max);
-          text(cx, full ? T.t('maxed') : '◈ ' + cost,
-            box.bx + rowW - 16 * us - adW, y + 9 * us, 12,
-            full ? p.dim : (can ? '#ffffff' : 'rgba(255,255,255,0.4)'), 'right', 700);
+          var bh2 = box.rh - 8 * us;
+          var adW = adsNeed ? 56 * us : 0;
+          var coinW = 74 * us;
+          var adX = box.bx + rowW - 8 * us - adW;
+          var coinX = adX - (adsNeed ? 6 * us : 0) - coinW;
 
-          if (full) return;
+          if (full) {
+            drawPips(cx, p, box.bx + rowW - 76 * us, y - 10 * us, have, u.max);
+            text(cx, T.t('maxed'), box.bx + rowW - 16 * us, y + 9 * us, 12,
+              p.dim, 'right', 700);
+            return;
+          }
 
-          var coinW = rowW - adW;
+          drawPips(cx, p, coinX - 14 * us, y, have, u.max);
+
+          cx.save();
+          cx.globalAlpha = can ? 1 : 0.4;
+          glass(cx, coinX, y - bh2 / 2, coinW, bh2, bh2 / 2, { film: can ? 0.4 : 0.1 });
+          cx.restore();
+          text(cx, '◈ ' + cost, coinX + coinW / 2, y, 12,
+            can ? '#ffffff' : 'rgba(255,255,255,0.45)', 'center', 800);
+
           buttons.push({
-            x: box.bx, y: y - box.rh / 2, w: coinW, h: box.rh,
+            x: coinX, y: y - bh2 / 2, w: coinW, h: bh2,
             action: function () {
               if (save.coins < cost) {
                 S.tone({ freq: 160, dur: 0.12, type: 'square', gain: 0.2 });
@@ -2181,16 +2221,12 @@
 
           if (!adsNeed) return;
 
-          // Вторая половина строки — «посмотреть ролик».
-          var ax = box.bx + rowW - adW, ah = box.rh - 8 * us;
-          cx.save();
-          glass(cx, ax, y - ah / 2, adW - 8 * us, ah, ah / 2, { film: 0.4 });
-          cx.restore();
-          text(cx, '▶ ' + adsDone + '/' + adsNeed, ax + (adW - 8 * us) / 2, y,
-            12, '#ffffff', 'center', 800);
+          glass(cx, adX, y - bh2 / 2, adW, bh2, bh2 / 2, { film: 0.45 });
+          text(cx, adsNeed > 1 ? '▶ ' + adsDone + '/' + adsNeed : '▶',
+            adX + adW / 2, y, 12, '#ffffff', 'center', 800);
 
           buttons.push({
-            x: ax, y: y - ah / 2, w: adW - 8 * us, h: ah,
+            x: adX, y: y - bh2 / 2, w: adW, h: bh2,
             action: function () { watchForUpgrade(u); }
           });
         })(i);
@@ -2250,6 +2286,12 @@
       }
     }
 
+    // Ответ на нажатие рисуем здесь: подсказка под полем закрыта затемнением
+    // лавки, и игрок её просто не видит.
+    if (adNoteTime > 0) {
+      text(cx, adNote, mid, H - 58 * us - 40 * us, 12,
+        'rgba(255,255,255,' + Math.min(1, adNoteTime).toFixed(2) + ')', 'center', 700);
+    }
     button(cx, T.t('back'), null, mid, H - 58 * us, 180, 46, p.accent,
       function () { S.click(); state = lives <= 0 && save.runs > 0 ? 'dead' : 'menu'; });
   }
