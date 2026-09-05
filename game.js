@@ -25,6 +25,19 @@
   var S = global.Sound;
   var A = global.Analytics;
 
+  /* Картинки. Плёнку и спрайты рисовал не код: переливы мыльного пузыря
+     процедурно получаются грязными, а рожица у огонька кодом не рисуется
+     вовсе. Игра стартует и без них — пока не загрузятся, рисуем запасными
+     фигурами, чтобы медленная сеть не показывала игроку пустой экран. */
+  var IMG = { ember: null, pearl: null };
+  function loadImage(key, src) {
+    var im = new global.Image();
+    im.onload = function () { IMG[key] = im; };
+    im.src = src;
+  }
+
+  var foam = null;
+
   /* --- Локализация ---------------------------------------------------
      Свой словарь, а не engine/i18n.js: тот занят строками Орбиты и общий
      на все игры. Трогать его нельзя — Орбита на модерации, и правка
@@ -33,7 +46,7 @@
   var DICT = {
     ru: {
       title: 'КАПЛЯ',
-      hint: 'Тап — поставить каплю. Ещё тап — застыть.',
+      hint: 'Держи — капля растёт. Отпусти — застынет.',
       warn: 'Не касайся углей',
       play: 'Играть',
       shop: 'Лавка',
@@ -60,7 +73,7 @@
       equip: 'Надеть',
       need: 'Нужно',
       tapHere: 'Нажми сюда',
-      tapStop: 'Нажми ещё раз, чтобы остановить',
+      tapStop: 'Отпусти, чтобы остановить',
       seeComet: 'Комета не ждёт',
       seePend: 'Маятник ходит по кругу',
       seePulse: 'Пульсар дышит',
@@ -140,8 +153,18 @@
   var LIFE_LEVELS = { 5: 1, 10: 1, 15: 1, 20: 1 };
   var INTERSTITIAL_EVERY = 3;
 
+  /* Насколько глубоко капля вдавливается в соседа, в долях меньшего
+     радиуса. Ровно столько, чтобы перегородка между ними читалась как
+     плоская стенка пены, и не больше: при глубоком вдавливании гроздь
+     превращается в кляксу и перестаёт читаться по отдельным каплям. */
+  var OVERLAP = 0.36;
+
   var WALL_HALF = 3.5;     // половина толщины барьера
-  var PEARL_R = 8;
+  /* Жемчужина. Была восьмёрка — на телефоне это точка, которую не
+     опознать: игрок видел белое пятнышко и не понимал, что это награда.
+     Радиус подбора считается отсюда же, так что она стала не только
+     заметнее, но и честнее в попадании. */
+  var PEARL_R = 13;
   var SLEEP_WAKE_DIST = 70;
   var SLEEP_DELAY = 0.45;  // фора игроку между пробуждением и движением
   var NEAR_MISS = 12;
@@ -168,7 +191,16 @@
      значение которого зафиксировано, и он не зависит ни от глубины,
      ни от скина. */
 
-  function waterHue(lv) { return 168 + Math.min((lv - 1) * 10, 165); }
+  /* Тон стекла, на котором живёт пена. Раньше это была толща воды и тон
+     уезжал от бирюзы к багрянцу — под мыльную плёнку такая гамма не
+     годится: она спорит с радугой самих пузырей и съедает оранжевый, за
+     которым закреплена смерть.
+
+     Теперь стекло уходит от индиго к глубокому фиолету и с каждым уровнем
+     темнеет. Прогресс по-прежнему виден до того, как игрок посмотрит на
+     цифру, но фон при этом остаётся подложкой, а не участником. */
+  function waterHue(lv) { return 248 + Math.min((lv - 1) * 4, 60); }
+  function glassDark(lv) { return Math.max(2.5, 7 - Math.min(lv - 1, 10) * 0.45); }
 
   function hsla(h, s, l, a) {
     return 'hsla(' + Math.round(h) + ',' + s + '%,' + l + '%,' + a + ')';
@@ -184,12 +216,17 @@
      может — иначе сломается единственное правило игры.
      «Роса» подстраивается под глубину: у бесплатного скина капли
      светлеют и холодеют вместе с водой. */
+  /* У каждого скина своя текстура плёнки. Подкраска общей радуги не
+     работала: поверх радужных разводов любой светофильтр читается как
+     лёгкий сдвиг оттенка, а не как другой пузырь. Файла нет — скин
+     откатывается к подкраске, игра от этого не ломается. */
   var SKINS = [
-    { cost: 0,   adaptive: true, ru: 'Роса',    en: 'Dew' },
-    { cost: 60,  hue: 195,       ru: 'Иней',    en: 'Frost' },
-    { cost: 140, hue: 145,       ru: 'Мята',    en: 'Mint' },
-    { cost: 260, hue: 305,       ru: 'Неон',    en: 'Neon' },
-    { cost: 450, hue: 265, extra: true, ru: 'Плазма', en: 'Plasma' }
+    { cost: 0,   adaptive: true, film: 'film.jpg',       ru: 'Роса',   en: 'Dew' },
+    { cost: 60,  hue: 195, film: 'film-frost.jpg',       ru: 'Иней',   en: 'Frost' },
+    { cost: 140, hue: 145, film: 'film-mint.jpg',        ru: 'Мята',   en: 'Mint' },
+    { cost: 260, hue: 305, film: 'film-neon.jpg',        ru: 'Неон',   en: 'Neon' },
+    { cost: 450, hue: 265, extra: true, film: 'film-plasma.jpg',
+      ru: 'Плазма', en: 'Plasma' }
   ];
 
   /* --- Прокачка --------------------------------------------------------
@@ -201,6 +238,16 @@
      он не сломал игру, соблюдены два условия: ни одна прокачка не
      отменяет смерть от угля, и все они упираются в потолок за разумное
      число забегов. Прокачка делает игрока увереннее, а не бессмертнее. */
+  /* Прокачка двух родов, и цены у них разные не случайно.
+
+     Первые четыре двигают числа: крупнее, быстрее, живучее. Мелкие шаги и
+     стоить должны как мелкие шаги — покупаются по дороге, между забегами.
+
+     Следующие четыре меняют способ игры: каждая даёт новое решение, а не
+     новую цифру, и покупается один раз навсегда. За такое платят заметно,
+     иначе они разойдутся за первый вечер и копить снова станет незачем.
+     Отсюда разрыв в разы, а не в проценты: от 320 до 400 против 25–40 за
+     первый шаг обычной прокачки. */
   var UPGRADES = [
     { key: 'life', max: 3, cost: [30, 80, 170],
       ru: 'Живучесть', en: 'Vitality',
@@ -209,11 +256,24 @@
       ru: 'Натяжение', en: 'Tension',
       ruSub: 'капля вырастает крупнее', enSub: 'drops grow larger' },
     { key: 'calm', max: 3, cost: [30, 85, 175],
-      ru: 'Хладнокровие', en: 'Composure',
-      ruSub: 'капля разгоняется медленнее', enSub: 'growth speeds up slower' },
+      ru: 'Напор', en: 'Surge',
+      ruSub: 'капля растёт быстрее', enSub: 'drops grow faster' },
     { key: 'pearl', max: 2, cost: [40, 110],
       ru: 'Чутьё', en: 'Instinct',
-      ruSub: 'жемчужина ловится издалека', enSub: 'pearls collect from farther' }
+      ruSub: 'жемчужина ловится издалека', enSub: 'pearls collect from farther' },
+
+    { key: 'edge', max: 1, cost: [320],
+      ru: 'Прилипание', en: 'Cling',
+      ruSub: 'капля у стены растёт вдоль неё', enSub: 'drops near walls grow along them' },
+    { key: 'spare', max: 1, cost: [400],
+      ru: 'Запасная', en: 'Spare',
+      ruSub: 'первая потеря за уровень бесплатна', enSub: 'first loss each level is free' },
+    { key: 'magnet', max: 1, cost: [260],
+      ru: 'Притяжение', en: 'Pull',
+      ruSub: 'жемчужины плывут к каплям', enSub: 'pearls drift toward your drops' },
+    { key: 'radar', max: 1, cost: [300],
+      ru: 'Предчувствие', en: 'Foresight',
+      ruSub: 'видно, куда уголь придёт через секунду', enSub: 'shows where embers will be' }
   ];
 
   /* --- Состояние ------------------------------------------------------ */
@@ -269,7 +329,7 @@
 
   var save = {
     best: 0, bestLevel: 1, coins: 0, skin: 0, owned: [1, 0, 0, 0, 0],
-    up: { life: 0, size: 0, calm: 0, pearl: 0 },
+    up: { life: 0, size: 0, calm: 0, pearl: 0, edge: 0, spare: 0, magnet: 0, radar: 0 },
     sound: 1, runs: 0, seen: {}
   };
 
@@ -308,6 +368,38 @@
   function rnd(a, b) { return a + Math.random() * (b - a); }
   function dist(ax, ay, bx, by) { return Math.hypot(ax - bx, ay - by); }
 
+  /* Площадь пересечения двух кругов. Нужна с тех пор, как капли стали
+     вдавливаться друг в друга по-настоящему: сумма площадей начала бы
+     считать перекрытие дважды, и заполнение врало бы в пользу игрока. */
+  function lensArea(r1, r2, d) {
+    if (d >= r1 + r2) return 0;
+    if (d <= Math.abs(r1 - r2)) {
+      var rm = Math.min(r1, r2);
+      return Math.PI * rm * rm;
+    }
+    var a1 = Math.acos(clamp((d * d + r1 * r1 - r2 * r2) / (2 * d * r1), -1, 1));
+    var a2 = Math.acos(clamp((d * d + r2 * r2 - r1 * r1) / (2 * d * r2), -1, 1));
+    return r1 * r1 * (a1 - Math.sin(2 * a1) / 2) +
+           r2 * r2 * (a2 - Math.sin(2 * a2) / 2);
+  }
+
+  /* Занятая площадь: сумма кругов минус попарные пересечения. Там, где
+     сошлись три капли, кусочек вычитается дважды — но вдавливание у нас
+     ограничено, такие места крошечные, и ошибка меньше десятой процента.
+     Точная формула стоила бы разбора всех пересечений дуг, а платить за это
+     нечем: игрок видит шкалу, а не бухгалтерию. */
+  function unionArea(list) {
+    var sum = 0, i, j;
+    for (i = 0; i < list.length; i++) sum += Math.PI * list[i].r * list[i].r;
+    for (i = 0; i < list.length; i++) {
+      for (j = i + 1; j < list.length; j++) {
+        sum -= lensArea(list[i].r, list[j].r,
+                        dist(list[i].x, list[i].y, list[j].x, list[j].y));
+      }
+    }
+    return sum > 0 ? sum : 0;
+  }
+
   /* Расстояние от точки до отрезка и нормаль от отрезка к точке.
      Нужно и для роста капли у барьера, и для отскока углей. */
   function segInfo(px, py, x1, y1, x2, y2) {
@@ -319,6 +411,26 @@
     var ddx = px - cx, ddy = py - cy;
     var d = Math.hypot(ddx, ddy);
     return { d: d, nx: d > 0.0001 ? ddx / d : 1, ny: d > 0.0001 ? ddy / d : 0, cx: cx, cy: cy };
+  }
+
+  /* Скин задаёт оттенок, которым подкрашивается плёнка внутри пузырей.
+     Раньше он менял цвет самой капли целиком — но капля теперь сделана из
+     радужной текстуры, и красить её сплошным цветом значит выбросить всё,
+     ради чего эта текстура нужна. Поэтому скин стал светофильтром: плёнка
+     остаётся радужной, но у «Инея» уходит в холод, у «Плазмы» в золото.
+     Разница видна, а материал сохраняется. */
+  function skinTint(lv) {
+    var sk = SKINS[save.skin] || SKINS[0];
+    // Своя текстура есть — красить нечего, она уже нужного цвета.
+    if (sk.film) return hsla(waterHue(lv), 70, 32, 0.12);
+    if (sk.adaptive) return hsla(waterHue(lv), 70, 32, 0.16);
+    return hsla(sk.hue, 78, 46, sk.extra ? 0.34 : 0.26);
+  }
+
+  /* Зовётся при запуске и при смене скина в лавке. */
+  function useSkinFilm() {
+    var sk = SKINS[save.skin] || SKINS[0];
+    foam.load('assets/' + (sk.film || 'film.jpg'));
   }
 
   function skinColors(lv) {
@@ -364,7 +476,14 @@
      напрямую, иначе прокачка начнёт работать через раз. */
   function upLvl(key) { return (save.up && save.up[key]) || 0; }
   function maxR() { return MAX_R + upLvl('size') * 7; }
-  function growAcc() { return GROW_ACC - upLvl('calm') * 0.06; }
+  function growAcc() { return GROW_ACC; }
+
+  /* Скорость роста. Раньше эта прокачка работала наоборот — замедляла
+     разгон, — и при двух тапах в этом был смысл: медленная капля давала
+     время среагировать на второй тап. С переходом на удержание смысл
+     исчез: игрок и так управляет непрерывно, а медленный рост означает
+     только дольше держать палец. Теперь прокачка ускоряет. */
+  function growBase() { return GROW_BASE + upLvl('calm') * 9; }
   function startLives() { return LIVES_START + upLvl('life'); }
   function livesMax() { return Math.min(startLives() + 2, 8); }
   function pearlReach() { return upLvl('pearl') * 16; }
@@ -726,7 +845,7 @@
     growing = null;
 
     drops.push({ x: g.x, y: g.y, r: g.r, born: 0 });
-    filled += Math.PI * g.r * g.r;
+    filled = unionArea(drops);
     frozeEver++;
 
     streak++;
@@ -799,7 +918,10 @@
     burst(g.x, g.y, g.r, false);
     shake = 1;
     streak = 0;
-    lives--;
+    /* «Запасная»: первая потеря на уровне не стоит жизни. Меняет не число,
+       а отношение к риску — на свежем уровне можно позволить себе жадность,
+       которой без неё не позволишь. */
+    if (!(upLvl('spare') && lostThisLevel === 0)) lives--;
     lostThisLevel++;
     S.death();
 
@@ -955,6 +1077,33 @@
     if (dot < 0) { h.vx -= 2 * dot * nx; h.vy -= 2 * dot * ny; }
   }
 
+  /* «Притяжение»: жемчужины медленно плывут к ближайшей застывшей капле.
+     Меняет не радиус подбора, а планировку: теперь имеет смысл ставить
+     каплю в стороне от жемчужины и ждать, пока та подойдёт сама. */
+  function movePearls(dt) {
+    if (!upLvl('magnet')) return;
+    for (var i = 0; i < pearls.length; i++) {
+      var p = pearls[i];
+      if (p.taken) continue;
+      var best = null, bd = 1e9;
+      for (var j = 0; j < drops.length; j++) {
+        var d = dist(p.x, p.y, drops[j].x, drops[j].y) - drops[j].r;
+        if (d < bd) { bd = d; best = drops[j]; }
+      }
+      if (!best || bd > 120) continue;
+      var dx = best.x - p.x, dy = best.y - p.y;
+      var m = Math.sqrt(dx * dx + dy * dy) || 1;
+      p.x += dx / m * 26 * dt;
+      p.y += dy / m * 26 * dt;
+      if (bd < 0) {
+        p.taken = 1;
+        runCoins += 3;
+        save.coins += 3;
+        S.tone({ freq: 940, dur: 0.09, type: 'sine', gain: 0.4 });
+      }
+    }
+  }
+
   function moveHazards(dt) {
     for (var i = 0; i < hazards.length; i++) {
       var h = hazards[i];
@@ -968,11 +1117,12 @@
       }
 
       if (h.type === 'pulsar') {
-        var prev = h.r;
         h.phase += dt * TAU / h.period;
         h.r = h.rMin + (h.rMax - h.rMin) * (0.5 - 0.5 * Math.cos(h.phase));
-        // Глухой удар в момент, когда пульсар начинает вдох.
-        if (prev <= h.rMin + 0.6 && h.r > prev) S.tone({ freq: 90, dur: 0.16, type: 'sine', gain: 0.3 });
+        /* Звука у пульсара нет. Был глухой удар на вдохе — на девяноста
+           герцах он на телефонном динамике превращался в дребезг и звучал
+           поломкой, а не предупреждением. Опасную зону и так видно кольцом,
+           так что информации мы не теряем. */
         continue;
       }
 
@@ -1026,7 +1176,7 @@
     var g = growing;
     // Скорость растёт вместе с радиусом: чем крупнее капля, тем труднее
     // остановить её точно. Кривая сложности живёт внутри одного тапа.
-    g.r += (GROW_BASE + g.r * growAcc()) * dt;
+    g.r += (growBase() + g.r * growAcc()) * dt;
     if (g.near > 0) g.near -= dt;
 
     var step = Math.floor((g.r - MIN_R) / 12);
@@ -1035,10 +1185,27 @@
       S.tone({ freq: 260 + step * 46, dur: 0.04, type: 'triangle', gain: 0.16 });
     }
 
-    // Стенка поля останавливает рост. Значит у края всегда безопасно,
-    // но мелко — честный размен, а не бесплатный угол.
+    /* Стенка поля останавливает рост. Значит у края всегда безопасно, но
+       мелко — честный размен, а не бесплатный угол.
+
+       «Прилипание» этот размен снимает: капля не упирается в стену, а
+       отъезжает от неё центром и продолжает расти вдоль. Появляется новая
+       цель — края и углы, куда раньше помещалась только мелочь. */
     var wallGap = Math.min(g.x, g.y, FIELD_W - g.x, FIELD_H - g.y);
-    if (g.r >= wallGap) { g.r = wallGap; freeze(); return; }
+    if (g.r >= wallGap) {
+      if (upLvl('edge')) {
+        if (g.x < g.r) g.x = g.r;
+        if (g.y < g.r) g.y = g.r;
+        if (g.x > FIELD_W - g.r) g.x = FIELD_W - g.r;
+        if (g.y > FIELD_H - g.r) g.y = FIELD_H - g.r;
+        // Совсем уж узкую щель всё равно не растянуть.
+        if (g.r * 2 >= Math.min(FIELD_W, FIELD_H)) { freeze(); return; }
+      } else {
+        g.r = wallGap;
+        freeze();
+        return;
+      }
+    }
 
     var i;
     for (i = 0; i < hazards.length; i++) {
@@ -1059,14 +1226,21 @@
       }
     }
 
-    // Соседняя капля — не смерть, а стена. Иначе игра наказывала бы за
-    // плотную упаковку, то есть за лучшую из возможных игр, и делала бы
-    // это в конце уровня, когда поле и так тесное.
+    /* Соседняя капля — не смерть, а стена. Иначе игра наказывала бы за
+       плотную упаковку, то есть за лучшую из возможных игр, и делала бы
+       это в конце уровня, когда поле и так тесное.
+
+       Но останавливаемся не в момент касания, а когда капля вдавилась в
+       соседа на OVERLAP. Мыльные пузыри так и ведут себя: прижимаются,
+       образуя между собой плоскую перегородку. Раньше вдавливание было
+       только нарисованным, и картинка обгоняла правила на пятую часть
+       радиуса — игрок видел касание угля раньше, чем оно случалось. */
     for (i = 0; i < drops.length; i++) {
       var dr = drops[i];
       var dd = dist(g.x, g.y, dr.x, dr.y);
-      if (dd < g.r + dr.r) {
-        g.r = Math.max(MIN_R, dd - dr.r);
+      var room = OVERLAP * Math.min(g.r, dr.r);
+      if (dd < g.r + dr.r - room) {
+        g.r = Math.max(MIN_R, dd - dr.r + room);
         freeze();
         return;
       }
@@ -1084,7 +1258,9 @@
     if (state === 'play') {
       runFrames++;
       runPlaySec += dt;
+      movePearls(dt);
     }
+    if (foam) foam.step(dt);
 
     if (flash > 0) flash = Math.max(0, flash - dt * 1.6);
     if (shake > 0) shake = Math.max(0, shake - dt * 3);
@@ -1141,18 +1317,26 @@
   function sx(fx) { return ox + fx * scale; }
   function sy(fy) { return oy + fy * scale; }
 
+  /* Фон почти чёрный — и это не про настроение, а про правило игры.
+     Тёплый цвет означает смерть, и он обязан быть виден мгновенно. Радужная
+     плёнка сама по себе яркая и пёстрая; если поднять яркость ещё и у фона,
+     оранжевому углю не на чем будет выделиться. Всё, что не пузырь и не
+     уголь, живёт в нижней трети яркости. */
   function pal() {
     var h = waterHue(level);
     return {
       h: h,
-      bgTop: hsla(h, 45, 9, 1),
-      bgBot: hsla(h, 55, 4, 1),
-      field: hsla(h, 42, 11, 1),
-      glow: hsla(h, 80, 55, 0.07),
-      edge: hsla(h, 70, 62, 0.22),
-      grid: hsla(h, 70, 62, 0.1),
-      accent: hsla(h, 78, 68, 1),
-      dim: hsla(h, 35, 80, 0.62),
+      bgTop: hsla(h, 46, glassDark(level) + 1.5, 1),
+      bgBot: hsla(h + 14, 60, 1.6, 1),
+      field: hsla(h, 42, glassDark(level), 1),
+      glow: hsla(h, 80, 55, 0.06),
+      edge: hsla(h, 70, 70, 0.22),
+      grid: hsla(h, 70, 78, 0.09),
+      /* Акцент не следует за глубиной: на радужной плёнке цвет, взятый из
+         той же гаммы, теряется в ней. Сиреневый белёсый читается на любом
+         кадре и не спорит с оранжевым, за которым закреплена смерть. */
+      accent: 'hsla(272,90%,82%,1)',
+      dim: 'hsla(268,30%,86%,0.6)',
       wall: hsla(h + 12, 22, 62, 0.88),
       wallGlow: hsla(h + 12, 30, 70, 0.25)
     };
@@ -1177,32 +1361,87 @@
     cx.fillText(str, x, y);
   }
 
+  /* Стеклянная поверхность: тёмная основа, плёнка сквозь неё, светлый верх
+     и тонкий ободок. Один материал на кнопки, панели и шкалу — интерфейс
+     должен быть сделан из того же, из чего пузыри, иначе он выглядит
+     приклеенным поверх чужой игры. */
+  function glass(cx, bx, by, bw, bh, r, opts) {
+    var o = opts || {};
+    var film = o.film === undefined ? 0.4 : o.film;
+
+    roundRect(cx, bx, by, bw, bh, r);
+    cx.fillStyle = o.base || 'rgba(10,13,34,0.8)';
+    cx.fill();
+
+    if (film > 0 && foam) {
+      cx.save();
+      roundRect(cx, bx, by, bw, bh, r);
+      cx.clip();
+      foam.sheen(cx, bx, by, bw, bh, film);
+      cx.restore();
+    }
+
+    // Свет сверху: без него стекло читается как матовая наклейка.
+    cx.save();
+    roundRect(cx, bx, by, bw, bh, r);
+    cx.clip();
+    var g = cx.createLinearGradient(0, by, 0, by + bh);
+    g.addColorStop(0, 'rgba(255,255,255,0.28)');
+    g.addColorStop(0.5, 'rgba(255,255,255,0.04)');
+    g.addColorStop(1, 'rgba(0,0,0,0.28)');
+    cx.fillStyle = g;
+    cx.fillRect(bx, by, bw, bh);
+    cx.restore();
+
+    cx.strokeStyle = o.rim || 'rgba(255,255,255,0.7)';
+    cx.lineWidth = Math.max(1, (o.rimW || 1.6) * us);
+    roundRect(cx, bx, by, bw, bh, r);
+    cx.stroke();
+  }
+
   function button(cx, label, sub, x, y, w, h, color, action, disabled) {
     var bw = w * us, bh = h * us;
     var bx = x - bw / 2, by = y - bh / 2;
+    var r = bh / 2;
 
     cx.save();
-    if (!disabled) { cx.shadowColor = color; cx.shadowBlur = 18 * us; }
-    cx.globalAlpha = disabled ? 0.35 : 1;
-    cx.fillStyle = color;
-    roundRect(cx, bx, by, bw, bh, 14 * us);
-    cx.fill();
+    if (!disabled) {
+      cx.shadowColor = 'rgba(190,150,255,0.5)';
+      cx.shadowBlur = 16 * us;
+    }
+    cx.globalAlpha = disabled ? 0.4 : 1;
+    glass(cx, bx, by, bw, bh, r, {
+      film: disabled ? 0.12 : 0.45,
+      rim: disabled ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.8)'
+    });
     cx.restore();
 
+    // Подпись светлая: на радужном стекле тёмный текст тонет в пятнах.
     var ty = sub ? y - 8 * us : y;
-    text(cx, label, x, ty, 17, disabled ? 'rgba(255,255,255,0.5)' : '#06131a', 'center', 800);
-    if (sub) text(cx, sub, x, y + 13 * us, 11, 'rgba(6,19,26,0.62)', 'center', 700);
+    cx.save();
+    cx.shadowColor = 'rgba(0,0,0,0.75)';
+    cx.shadowBlur = 5 * us;
+    text(cx, label, x, ty, 17,
+      disabled ? 'rgba(255,255,255,0.45)' : '#ffffff', 'center', 800);
+    if (sub) text(cx, sub, x, y + 13 * us, 11, 'rgba(255,255,255,0.72)', 'center', 700);
+    cx.restore();
 
     if (!disabled) buttons.push({ x: bx, y: by, w: bw, h: bh, action: action });
   }
 
   /* --- Отрисовка: поле ---------------------------------------------------- */
 
+  /* Мир игры — не толща воды, а тёмное мокрое стекло, по которому
+     расползается мыльная плёнка. Отсюда и три слоя фона: медленные
+     радужные разводы, скользящий по стеклу блик и расфокусированные
+     пузырьки в глубине. Всё держится в нижней трети яркости: любой
+     светлый фон отнял бы у оранжевого угля его единственное свойство —
+     мгновенную заметность. */
   function drawField(cx, p, t) {
     var fw = FIELD_W * scale, fh = FIELD_H * scale;
 
     cx.save();
-    cx.shadowColor = hsla(p.h, 80, 55, 0.2);
+    cx.shadowColor = hsla(p.h, 80, 60, 0.18);
     cx.shadowBlur = 26 * us;
     cx.fillStyle = p.field;
     roundRect(cx, ox, oy, fw, fh, 18 * us);
@@ -1213,53 +1452,78 @@
     roundRect(cx, ox, oy, fw, fh, 18 * us);
     cx.clip();
 
-    var g = cx.createRadialGradient(ox + fw / 2, oy + fh / 2, 0,
-                                    ox + fw / 2, oy + fh / 2, fw * 0.8);
-    g.addColorStop(0, p.glow);
-    g.addColorStop(1, hsla(p.h, 80, 55, 0));
-    cx.fillStyle = g;
+    /* Разводы. Три больших мягких пятна из плёночных цветов, каждое со
+       своим ходом, — вместе они дышат и никогда не повторяются. Раньше
+       здесь была каустика бассейна: дуги света на дне. Под стеклом она
+       читалась как чужой рисунок, приклеенный снизу. */
+    var BLOOM = [
+      { c: '196,110,255', sp: 0.13, ax: 0.30, ay: 0.34, r: 0.62 },
+      { c: '80,190,255',  sp: 0.09, ax: 0.62, ay: 0.58, r: 0.55 },
+      { c: '255,180,90',  sp: 0.07, ax: 0.44, ay: 0.78, r: 0.40 }
+    ];
+    for (var b = 0; b < BLOOM.length; b++) {
+      var bl = BLOOM[b];
+      var bx = ox + fw * (bl.ax + Math.sin(t * bl.sp + b * 2.1) * 0.16);
+      var by = oy + fh * (bl.ay + Math.cos(t * bl.sp * 0.8 + b) * 0.12);
+      var br = fw * bl.r * (1 + Math.sin(t * bl.sp * 1.7 + b) * 0.12);
+      var bg = cx.createRadialGradient(bx, by, 0, bx, by, br);
+      bg.addColorStop(0, 'rgba(' + bl.c + ',0.15)');
+      bg.addColorStop(0.55, 'rgba(' + bl.c + ',0.05)');
+      bg.addColorStop(1, 'rgba(' + bl.c + ',0)');
+      cx.fillStyle = bg;
+      cx.fillRect(ox, oy, fw, fh);
+    }
+
+    /* Блик, ползущий по стеклу. Одна широкая косая полоса, проходящая
+       поле примерно за двадцать секунд: движение, которое замечаешь, но
+       которое не отвлекает от игры. */
+    var sweep = ((t * 0.05) % 1.4) - 0.2;
+    var sxp = ox + fw * sweep;
+    var sg = cx.createLinearGradient(sxp - fw * 0.3, oy, sxp + fw * 0.3, oy + fh);
+    sg.addColorStop(0, 'rgba(255,255,255,0)');
+    sg.addColorStop(0.5, 'rgba(220,230,255,0.05)');
+    sg.addColorStop(1, 'rgba(255,255,255,0)');
+    cx.fillStyle = sg;
     cx.fillRect(ox, oy, fw, fh);
 
-    // Каустика: медленные светлые дуги, как отблески на дне бассейна.
-    // Без них поле — плоская подложка; с ними оно становится поверхностью,
-    // и капли перестают читаться как кружки на бумаге.
-    cx.strokeStyle = hsla(p.h, 90, 74, 0.035);
-    for (var c = 0; c < 3; c++) {
-      var cy = FIELD_H * (0.24 + c * 0.28) + Math.sin(t * 0.26 + c * 1.7) * 30;
-      var cw = FIELD_W * (0.52 + 0.12 * Math.sin(t * 0.19 + c));
-      // Толстая и почти прозрачная линия читается как размытое пятно
-      // света, тонкая — как начерченный эллипс. Блюра на канвасе нет,
-      // поэтому мягкость делается толщиной.
-      cx.lineWidth = (16 + c * 6) * scale;
-      cx.beginPath();
-      cx.ellipse(sx(FIELD_W / 2 + Math.sin(t * 0.15 + c * 2.1) * 70), sy(cy),
-        cw * scale, (26 + c * 10) * scale, 0, 0, TAU);
-      cx.stroke();
-    }
-
-    // Пузырьки, поднимающиеся со дна.
+    /* Пузырьки в глубине — расфокусированные, поэтому без резкого контура:
+       мягкая заливка и еле заметный ободок. Они и дают чувство объёма
+       позади плёнки, и служат меркой размера для растущей капли. */
     for (var mi = 0; mi < motes.length; mi++) {
       var m = motes[mi];
-      cx.fillStyle = hsla(p.h, 80, 88, 0.09);
+      var mx = sx(m.x), my = sy(m.y), mr = m.r * scale;
+      var mg = cx.createRadialGradient(mx - mr * 0.3, my - mr * 0.35, 0, mx, my, mr);
+      mg.addColorStop(0, 'rgba(210,225,255,0.16)');
+      mg.addColorStop(0.7, 'rgba(170,190,255,0.05)');
+      mg.addColorStop(1, 'rgba(170,190,255,0)');
+      cx.fillStyle = mg;
       cx.beginPath();
-      cx.arc(sx(m.x), sy(m.y), m.r * scale, 0, TAU);
+      cx.arc(mx, my, mr, 0, TAU);
       cx.fill();
-      cx.strokeStyle = hsla(p.h, 90, 92, 0.16);
-      cx.lineWidth = Math.max(0.6, 0.9 * us);
-      cx.stroke();
+      if (mr > 2.4 * us) {
+        cx.strokeStyle = 'rgba(220,235,255,0.10)';
+        cx.lineWidth = Math.max(0.6, 0.8 * us);
+        cx.stroke();
+      }
     }
 
-    // Точечная сетка. Без неё поле читается как пустота: глазу не за что
-    // зацепиться, и размер растущей капли не с чем сравнить. Точки слегка
-    // ходят волной — сетка сама становится частью поверхности.
-    var step = FIELD_W / 8;
-    cx.fillStyle = p.grid;
+    /* Конденсат: мелкие капли на стекле. Заменил точечную сетку — та была
+       чертёжной, а нужна была всего одна её работа: дать глазу мерку, с
+       которой он сравнивает размер растущей капли. Капли конденсата делают
+       то же самое и принадлежат этому миру. */
+    var step = FIELD_W / 7;
     for (var gx = step / 2; gx < FIELD_W; gx += step) {
       for (var gy = step / 2; gy < FIELD_H; gy += step) {
-        var wob = Math.sin(t * 0.9 + gx * 0.03 + gy * 0.02);
+        var wob = Math.sin(t * 0.5 + gx * 0.03 + gy * 0.02);
+        var dx0 = sx(gx), dy0 = sy(gy);
+        var dr = Math.max(0.9, (1.6 + wob * 0.3) * us);
+        cx.fillStyle = p.grid;
         cx.beginPath();
-        cx.arc(sx(gx + wob * 2.2), sy(gy + Math.cos(t * 0.7 + gx * 0.02) * 1.6),
-          Math.max(0.8, (1.3 + wob * 0.25) * us), 0, TAU);
+        cx.arc(dx0, dy0, dr, 0, TAU);
+        cx.fill();
+        cx.fillStyle = 'rgba(255,255,255,0.22)';
+        cx.beginPath();
+        cx.arc(dx0 - dr * 0.32, dy0 - dr * 0.36, dr * 0.34, 0, TAU);
         cx.fill();
       }
     }
@@ -1294,19 +1558,28 @@
       if (p.taken) continue;
       var x = sx(p.x), y = sy(p.y);
       var k = 1 + Math.sin(time * 3 + p.ph) * 0.16;
-      cx.save();
-      cx.shadowColor = 'rgba(255,255,255,0.9)';
-      cx.shadowBlur = 12 * us;
+      var r = PEARL_R * scale * k;
+
+      // Ореол под жемчужиной: на радужной пене белый спрайт сам по себе
+      // теряется, а подложка отделяет его от плёнки.
+      var g = cx.createRadialGradient(x, y, 0, x, y, r * 2.2);
+      g.addColorStop(0, 'rgba(255,240,255,0.45)');
+      g.addColorStop(1, 'rgba(255,240,255,0)');
+      cx.fillStyle = g;
+      cx.beginPath();
+      cx.arc(x, y, r * 2.2, 0, TAU);
+      cx.fill();
+
+      var im = IMG.pearl;
+      if (im) {
+        var h = r * 2.8, w = h * (im.width / im.height);
+        cx.drawImage(im, x - w / 2, y - h / 2, w, h);
+        continue;
+      }
       cx.fillStyle = '#ffffff';
       cx.beginPath();
-      cx.arc(x, y, PEARL_R * scale * k * 0.62, 0, TAU);
+      cx.arc(x, y, r * 0.62, 0, TAU);
       cx.fill();
-      cx.restore();
-      cx.strokeStyle = 'rgba(255,255,255,0.6)';
-      cx.lineWidth = Math.max(1, 1.1 * us);
-      cx.beginPath();
-      cx.arc(x, y, PEARL_R * scale * k, 0, TAU);
-      cx.stroke();
     }
   }
 
@@ -1322,129 +1595,13 @@
     }
   }
 
-  /* Перемычки между соприкоснувшимися каплями.
-     Это главное, что превращает набор кругов в жидкость: две капли,
-     между которыми есть вогнутая шейка, мозг читает как слившиеся, а два
-     касающихся круга — как два круга. Считается геометрией, без фильтров
-     канваса: ctx.filter не работает в старых Android WebView, а ВК крутит
-     игры именно там. */
-  function drawBridges(cx, col) {
-    var GAP = 22;
-    for (var i = 0; i < drops.length; i++) {
-      for (var j = i + 1; j < drops.length; j++) {
-        var a = drops[i], b = drops[j];
-        var d = dist(a.x, a.y, b.x, b.y);
-        var touch = a.r + b.r;
-        if (d > touch + GAP || d < 1) continue;
-
-        // k = 1 вплотную, 0 на пределе видимости перемычки.
-        var k = clamp(1 - (d - touch) / GAP, 0, 1);
-        if (k <= 0.02) continue;
-        var ang = Math.atan2(b.y - a.y, b.x - a.x);
-        var sp = 0.5 * k;
-        var waist = Math.min(a.r, b.r) * 0.42 * k;
-
-        var ax1 = a.x + Math.cos(ang + sp) * a.r, ay1 = a.y + Math.sin(ang + sp) * a.r;
-        var ax2 = a.x + Math.cos(ang - sp) * a.r, ay2 = a.y + Math.sin(ang - sp) * a.r;
-        var bx1 = b.x + Math.cos(ang + Math.PI - sp) * b.r, by1 = b.y + Math.sin(ang + Math.PI - sp) * b.r;
-        var bx2 = b.x + Math.cos(ang + Math.PI + sp) * b.r, by2 = b.y + Math.sin(ang + Math.PI + sp) * b.r;
-
-        var mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
-        var px = -Math.sin(ang), py = Math.cos(ang);
-
-        cx.fillStyle = col.mid;
-        cx.beginPath();
-        cx.moveTo(sx(ax1), sy(ay1));
-        cx.quadraticCurveTo(sx(mx + px * waist), sy(my + py * waist), sx(bx1), sy(by1));
-        cx.lineTo(sx(bx2), sy(by2));
-        cx.quadraticCurveTo(sx(mx - px * waist), sy(my - py * waist), sx(ax2), sy(ay2));
-        cx.closePath();
-        cx.fill();
-
-        // Край шейки повторяет мениск капли: тёмная тень снаружи,
-        // светлый ободок внутри. Без этого шейка выглядит наклейкой.
-        var edge = function (w, style) {
-          cx.strokeStyle = style;
-          cx.lineWidth = Math.max(1, w * us);
-          cx.beginPath();
-          cx.moveTo(sx(ax1), sy(ay1));
-          cx.quadraticCurveTo(sx(mx + px * waist), sy(my + py * waist), sx(bx1), sy(by1));
-          cx.stroke();
-          cx.beginPath();
-          cx.moveTo(sx(ax2), sy(ay2));
-          cx.quadraticCurveTo(sx(mx - px * waist), sy(my - py * waist), sx(bx2), sy(by2));
-          cx.stroke();
-        };
-        edge(2.6, 'rgba(0,0,0,0.3)');
-        edge(1.4, col.rim);
-      }
-    }
-  }
-
-  function drawDrop(cx, d, col) {
-    var r = d.r * scale;
-    // Застывшая капля «садится» с лёгким перелётом: движение подтверждает
-    // игроку, что тап засчитан, быстрее любой надписи.
-    if (d.born < 1) r *= 1 + Math.sin(d.born * Math.PI) * 0.06;
-    var x = sx(d.x), y = sy(d.y);
-
-    var g = cx.createRadialGradient(x - r * 0.3, y - r * 0.35, r * 0.05, x, y, r);
-    g.addColorStop(0, col.core);
-    g.addColorStop(0.45, col.mid);
-    g.addColorStop(1, col.edge);
-
-    cx.save();
-    cx.shadowColor = col.glow;
-    cx.shadowBlur = 14 * us;
-    cx.fillStyle = g;
-    cx.beginPath();
-    cx.arc(x, y, r, 0, TAU);
-    cx.fill();
-    cx.restore();
-
-    // Мениск: тёмная тень снаружи и светлый ободок внутри. Так выглядит
-    // поверхностное натяжение, и без него капля остаётся плоским пятном.
-    cx.strokeStyle = 'rgba(0,0,0,0.3)';
-    cx.lineWidth = Math.max(1, 2.6 * us);
-    cx.beginPath();
-    cx.arc(x, y, r + cx.lineWidth * 0.35, 0, TAU);
-    cx.stroke();
-
-    cx.strokeStyle = col.rim;
-    cx.lineWidth = Math.max(1, 1.4 * us);
-    cx.beginPath();
-    cx.arc(x, y, Math.max(1, r - cx.lineWidth / 2), 0, TAU);
-    cx.stroke();
-
-    // Блик сверху-слева: одна дуга, но именно она задаёт объём.
-    if (r > 10 * us) {
-      cx.strokeStyle = 'rgba(255,255,255,0.55)';
-      cx.lineWidth = Math.max(1, r * 0.09);
-      cx.beginPath();
-      cx.arc(x, y, r * 0.76, Math.PI * 1.03, Math.PI * 1.42);
-      cx.stroke();
-    }
-  }
-
-  function drawGrowing(cx, g, col, time) {
+  /* Растущая капля живёт внутри общей пены, поэтому от неё нужно только
+     одно, чего у застывших нет: сигнал «я ещё расту, останови меня».
+     Пульсирующее кольцо снаружи контура, и оно же вспыхивает белым при
+     близком промахе мимо угля. */
+  function drawGrowRing(cx, g, time) {
     var r = g.r * scale;
     var x = sx(g.x), y = sy(g.y);
-
-    var grad = cx.createRadialGradient(x - r * 0.3, y - r * 0.35, r * 0.05, x, y, r);
-    grad.addColorStop(0, '#ffffff');
-    grad.addColorStop(0.5, col.core);
-    grad.addColorStop(1, col.mid);
-
-    cx.save();
-    cx.shadowColor = col.glow;
-    cx.shadowBlur = 24 * us;
-    cx.fillStyle = grad;
-    cx.beginPath();
-    cx.arc(x, y, r, 0, TAU);
-    cx.fill();
-    cx.restore();
-
-    // Пульсирующее кольцо: сообщает «капля ещё живая, останови меня».
     var pulse = 1 + Math.sin(time * 12) * 0.04;
     cx.strokeStyle = g.near > 0 ? '#ffffff' : 'rgba(255,255,255,0.75)';
     cx.lineWidth = Math.max(1.5, (g.near > 0 ? 3.2 : 2) * us);
@@ -1457,29 +1614,98 @@
      Тёплый — единственный цвет с зафиксированным значением. Он не зависит
      ни от глубины, ни от скина, ни от типа угля. */
 
+  /* Уголь — спрайт с мордой, а не светящийся кружок. Свечение всё равно
+     рисуем кодом: оно должно пульсировать и гаснуть у спящих, а вшитое в
+     картинку это не умеет. Спящий уголь показывается тусклым и мельче —
+     разница читается с одного взгляда, как и была задумана. */
   function ember(cx, x, y, r, pulse, dim) {
+    var R = r * 1.6 * pulse;
+
     cx.save();
-    cx.shadowColor = EMBER_GLOW;
-    cx.shadowBlur = (dim ? 8 : 18) * us;
-    var g = cx.createRadialGradient(x, y, 0, x, y, r * 1.6 * pulse);
-    g.addColorStop(0, dim ? EMBER_DIM : EMBER_CORE);
-    g.addColorStop(0.4, dim ? 'rgba(255,150,80,0.35)' : EMBER_MID);
+    var g = cx.createRadialGradient(x, y, 0, x, y, R * 1.3);
+    g.addColorStop(0, dim ? 'rgba(255,150,80,0.30)' : 'rgba(255,170,90,0.55)');
     g.addColorStop(1, 'rgba(255,107,53,0)');
     cx.fillStyle = g;
     cx.beginPath();
-    cx.arc(x, y, r * 1.6 * pulse, 0, TAU);
+    cx.arc(x, y, R * 1.3, 0, TAU);
     cx.fill();
     cx.restore();
 
+    var im = IMG.ember;
+    if (im) {
+      // Спрайт нарисован каплей вверх, вписываем по высоте.
+      var h = R * 2.1, w = h * (im.width / im.height);
+      cx.save();
+      cx.globalAlpha = dim ? 0.45 : 1;
+      cx.drawImage(im, x - w / 2, y - h / 2, w, h);
+      cx.restore();
+      return;
+    }
+
+    // Картинка ещё не пришла — рисуем запасной уголёк.
     cx.fillStyle = dim ? 'rgba(255,180,120,0.5)' : EMBER_CORE;
     cx.beginPath();
-    cx.arc(x, y, r * 0.5, 0, TAU);
+    cx.arc(x, y, r * 0.6, 0, TAU);
     cx.fill();
+  }
+
+  /* Где уголь окажется через ahead секунд. Маятник ходит по своей орбите,
+     летящие отражаются от стенок поля и от барьеров; пульсар и спящий
+     стоят на месте, для них предсказывать нечего. */
+  function predict(h, ahead) {
+    if (h.type === 'pulsar' || h.type === 'sleep') return null;
+    if (h.type === 'pend') {
+      var a = h.ang + h.w * ahead;
+      return { x: h.cx + Math.cos(a) * h.orbit, y: h.cy + Math.sin(a) * h.orbit };
+    }
+    if (h.vx === undefined) return null;
+
+    /* Отражение считаем точно, разворачиванием, а не шагами по времени.
+       Шагами получалось дёргано: у стенки отскок то попадал внутрь шага,
+       то нет, и призрак прыгал от кадра к кадру. Здесь же путь сначала
+       продлевается по прямой, а потом складывается обратно в поле —
+       результат непрерывен, сколько бы отскоков ни случилось.
+
+       Барьеры при этом не учитываются: их отражение так не сворачивается.
+       Плавная подсказка, которая изредка ошибается у барьера, полезнее
+       точной, но дёргающейся. */
+    return {
+      x: fold(h.x + h.vx * ahead, h.r, FIELD_W - h.r),
+      y: fold(h.y + h.vy * ahead, h.r, FIELD_H - h.r)
+    };
+  }
+
+  /* Складывает координату обратно в отрезок [lo, hi], отражая от концов —
+     как если бы точка отскакивала от стенок сколько угодно раз. */
+  function fold(v, lo, hi) {
+    var span = hi - lo;
+    if (span <= 0) return lo;
+    var m = (v - lo) % (span * 2);
+    if (m < 0) m += span * 2;
+    return lo + (m <= span ? m : span * 2 - m);
   }
 
   function drawHazard(cx, h, time) {
     var x = sx(h.x), y = sy(h.y);
     var pulse = 1 + Math.sin(time * 6 + h.ph) * 0.12;
+
+    /* «Предчувствие»: бледный призрак там, где уголь окажется через
+       секунду. Превращает реакцию в расчёт — можно ставить каплю туда,
+       откуда уголь уже ушёл, вместо того чтобы угадывать.
+
+       Считаем шагами с отражением от стенок, а не по прямой. Прямая врёт
+       ровно там, где предсказание нужнее всего: у края поля, куда уголь
+       как раз и летит перед отскоком. */
+    if (upLvl('radar')) {
+      var gp = predict(h, 1);
+      if (gp) {
+        cx.strokeStyle = 'rgba(255,150,80,0.32)';
+        cx.lineWidth = Math.max(1, 1.2 * us);
+        cx.beginPath();
+        cx.arc(sx(gp.x), sy(gp.y), h.r * scale, 0, TAU);
+        cx.stroke();
+      }
+    }
 
     if (h.type === 'pend') {
       // Тусклая орбита: траектория видна заранее, маятник проходят
@@ -1622,11 +1848,39 @@
     // чем играешь, иначе игрок ищет связь между иконкой и механикой.
     for (var i = 0; i < livesMax(); i++) {
       if (i >= Math.max(startLives(), lives)) break;
-      var x = ox + fw - (i * 16 + 7) * us;
-      cx.fillStyle = i < lives ? p.accent : hsla(p.h, 60, 60, 0.18);
+      var x = ox + fw - (i * 18 + 8) * us, ly = 24 * us, lr = 6.5 * us;
+      var live = i < lives;
+
+      // Жизнь — маленький пузырь: то же стекло, что и на поле, только
+      // потраченный гаснет и остаётся пустым контуром.
       cx.beginPath();
-      cx.arc(x, 24 * us, 5.5 * us, 0, TAU);
-      cx.fill();
+      cx.arc(x, ly, lr, 0, TAU);
+      if (live && foam) {
+        cx.save();
+        cx.clip();
+        foam.sheen(cx, x - lr, ly - lr, lr * 2, lr * 2, 1);
+        /* Холодная подкраска обязательна. Кусок плёнки такого размера
+           часто попадает на тёплый участок текстуры, и жизнь начинает
+           выглядеть как уголь — то есть ровно наоборот тому, что она
+           значит. Тёплый цвет в этой игре занят смертью. */
+        cx.fillStyle = 'rgba(120,150,255,0.42)';
+        cx.fillRect(x - lr, ly - lr, lr * 2, lr * 2);
+        var lg2 = cx.createRadialGradient(x - lr * 0.35, ly - lr * 0.4, 0, x, ly, lr);
+        lg2.addColorStop(0, 'rgba(255,255,255,0.8)');
+        lg2.addColorStop(0.6, 'rgba(255,255,255,0)');
+        lg2.addColorStop(1, 'rgba(0,0,0,0.35)');
+        cx.fillStyle = lg2;
+        cx.fillRect(x - lr, ly - lr, lr * 2, lr * 2);
+        cx.restore();
+      } else {
+        cx.fillStyle = 'rgba(255,255,255,0.06)';
+        cx.fill();
+      }
+      cx.strokeStyle = live ? 'rgba(255,255,255,0.85)' : 'rgba(255,255,255,0.22)';
+      cx.lineWidth = Math.max(1, 1.2 * us);
+      cx.beginPath();
+      cx.arc(x, ly, lr, 0, TAU);
+      cx.stroke();
     }
 
     if (runCoins > 0) text(cx, '◈ ' + runCoins, ox, 45 * us, 12, 'rgba(255,255,255,0.6)', 'left', 700);
@@ -1639,36 +1893,90 @@
       text(cx, '×' + m.toFixed(1), W / 2, 46 * us, 14 * mp, p.accent, 'center', 800);
     }
 
-    var bw = fw, bh = 7 * us, by = oy - 13 * us;
-    cx.fillStyle = hsla(p.h, 60, 60, 0.14);
+    /* Шкала — стеклянная трубка, в которую наливается та же плёнка. Пустая
+       часть почти чёрная, налитая переливается: видно не только «сколько»,
+       но и «чего» — того же вещества, из которого игрок строит поле. */
+    var bw = fw, bh = 9 * us, by = oy - 15 * us;
     roundRect(cx, ox, by, bw, bh, bh / 2);
+    cx.fillStyle = 'rgba(8,10,28,0.85)';
     cx.fill();
 
     var k = clamp(filled / target, 0, 1);
     if (k > 0) {
+      var fillW = Math.max(bh, bw * k);
       cx.save();
-      cx.shadowColor = hsla(p.h, 90, 70, 0.7);
-      cx.shadowBlur = 10 * us;
-      cx.fillStyle = k >= 1 ? '#ffffff' : p.accent;
-      roundRect(cx, ox, by, Math.max(bh, bw * k), bh, bh / 2);
-      cx.fill();
+      roundRect(cx, ox, by, fillW, bh, bh / 2);
+      cx.clip();
+      if (!foam.sheen(cx, ox, by, bw, bh, 1)) {
+        cx.fillStyle = p.accent;
+        cx.fillRect(ox, by, fillW, bh);
+      }
+      var lg = cx.createLinearGradient(0, by, 0, by + bh);
+      lg.addColorStop(0, 'rgba(255,255,255,0.45)');
+      lg.addColorStop(0.6, 'rgba(255,255,255,0)');
+      cx.fillStyle = lg;
+      cx.fillRect(ox, by, fillW, bh);
       cx.restore();
+
+      if (k >= 1) {
+        cx.save();
+        cx.shadowColor = 'rgba(255,255,255,0.9)';
+        cx.shadowBlur = 12 * us;
+        cx.strokeStyle = '#ffffff';
+        cx.lineWidth = Math.max(1, 1.6 * us);
+        roundRect(cx, ox, by, bw, bh, bh / 2);
+        cx.stroke();
+        cx.restore();
+      }
     }
+
+    cx.strokeStyle = 'rgba(255,255,255,0.35)';
+    cx.lineWidth = Math.max(1, 1.2 * us);
+    roundRect(cx, ox, by, bw, bh, bh / 2);
+    cx.stroke();
     text(cx, Math.round(k * 100) + '%', ox + bw, 45 * us, 12,
       k >= 1 ? '#ffffff' : p.dim, 'right', 700);
   }
 
   function overlay(cx, p, alpha) {
-    cx.fillStyle = hsla(p.h, 55, 4, alpha);
+    cx.fillStyle = 'rgba(4,5,18,' + alpha.toFixed(2) + ')';
+    cx.fillRect(0, 0, W, H);
+    // Виньетка: собирает взгляд к центру, где стоят кнопки.
+    var g = cx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.25,
+                                    W / 2, H / 2, Math.max(W, H) * 0.75);
+    g.addColorStop(0, 'rgba(0,0,0,0)');
+    g.addColorStop(1, 'rgba(0,0,0,0.55)');
+    cx.fillStyle = g;
     cx.fillRect(0, 0, W, H);
   }
 
+  /* Заголовок с радужным ореолом. Заливать сам текст плёнкой канвас не
+     умеет без отдельного холста, а на слабом телефоне это лишний буфер
+     каждый кадр; свечение позади даёт тот же эффект впятеро дешевле. */
+  function glowTitle(cx, str, x, y, size) {
+    var r = size * us * 2.2;
+    var g = cx.createRadialGradient(x, y, 0, x, y, r);
+    g.addColorStop(0, 'rgba(196,120,255,0.45)');
+    g.addColorStop(0.45, 'rgba(90,180,255,0.22)');
+    g.addColorStop(1, 'rgba(90,180,255,0)');
+    cx.fillStyle = g;
+    cx.beginPath();
+    cx.arc(x, y, r, 0, TAU);
+    cx.fill();
+
+    cx.save();
+    cx.shadowColor = 'rgba(150,120,255,0.9)';
+    cx.shadowBlur = 18 * us;
+    text(cx, str, x, y, size, '#ffffff', 'center', 800);
+    cx.restore();
+  }
+
   function drawMenu(cx, p) {
-    overlay(cx, p, 0.8);
+    overlay(cx, p, 0.82);
     var mid = W / 2;
     var top = H * 0.24;
 
-    text(cx, T.t('title'), mid, top, 50, '#ffffff', 'center', 800);
+    glowTitle(cx, T.t('title'), mid, top, 50);
     text(cx, T.t('hint'), mid, top + 40 * us, 13, p.dim, 'center', 500);
     text(cx, T.t('warn'), mid, top + 60 * us, 13, EMBER_MID, 'center', 600);
 
@@ -1723,7 +2031,7 @@
   }
 
   function shopRow(cx, p, y, rowW, active) {
-    var bx = W / 2 - rowW / 2, rh = 52 * us;
+    var bx = W / 2 - rowW / 2, rh = 46 * us;
     cx.fillStyle = active ? hsla(p.h, 60, 60, 0.18) : hsla(p.h, 40, 50, 0.08);
     roundRect(cx, bx, y - rh / 2, rowW, rh, 12 * us);
     cx.fill();
@@ -1776,7 +2084,7 @@
           var full = have >= u.max;
           var cost = upCost(u);
           var can = !full && save.coins >= cost;
-          var y = top + idx * 60 * us;
+          var y = top + idx * 52 * us;
           var box = shopRow(cx, p, y, rowW, full);
 
           text(cx, T.dict === DICT.ru ? u.ru : u.en, box.bx + 16 * us, y - 10 * us,
@@ -1840,11 +2148,13 @@
             action: function () {
               if (save.owned[idx]) {
                 save.skin = idx;
+                useSkinFilm();
                 S.click();
               } else if (save.coins >= sk.cost) {
                 save.coins -= sk.cost;
                 save.owned[idx] = 1;
                 save.skin = idx;
+                useSkinFilm();
                 S.reward();
               } else {
                 S.tone({ freq: 160, dur: 0.12, type: 'square', gain: 0.2 });
@@ -1896,12 +2206,20 @@
     drawWaves(cx, p);
     drawWalls(cx, p);
     drawPearls(cx, t);
+
+    /* Застывшие капли и растущая рисуются одной пеной, а не по очереди:
+       растущая должна прижиматься к соседям так же, как остальные, иначе
+       она читается как чужой объект, наложенный сверху. */
     var i;
-    for (i = 0; i < drops.length; i++) drawDrop(cx, drops[i], col);
-    // Перемычки поверх капель: их собственный тёмный мениск иначе
-    // затирает шейку, и слияние снова распадается на два круга.
-    drawBridges(cx, col);
-    if (growing) drawGrowing(cx, growing, col, t);
+    var cluster = drops;
+    if (growing) {
+      cluster = drops.slice();
+      cluster.push(growing);
+    }
+    foam.draw(cx, cluster, {
+      x: ox, y: oy, w: FIELD_W * scale, h: FIELD_H * scale
+    }, sx, sy, scale, skinTint(level));
+    if (growing) drawGrowRing(cx, growing, t);
     for (i = 0; i < hazards.length; i++) drawHazard(cx, hazards[i], t);
     drawParts(cx, p);
 
@@ -1960,9 +2278,22 @@
       return;
     }
 
-    if (growing) { freeze(); return; }
+    /* Управление удержанием: держишь — капля растёт, отпустил — застыла.
+       Раньше было два отдельных тапа, и это читалось хуже: между «поставил»
+       и «остановил» терялась связь с рукой. Здесь рост длится ровно столько,
+       сколько палец на экране, — прямой физический контроль.
+
+       Повторное нажатие, пока капля растёт, игнорируем: палец уже держит,
+       второе касание может прийти только случайно. */
+    if (growing) return;
     if (fromKey) { placeAt(kb.x, kb.y); return; }
     placeAt((x - ox) / scale, (y - oy) / scale);
+  }
+
+  /* Отпустили — капля застывает. Координаты не важны: важно, что отпустили. */
+  function onRelease() {
+    if (state !== 'play' || !growing) return;
+    freeze();
   }
 
   /* --- Раскладка и запуск --------------------------------------------------- */
@@ -2020,11 +2351,17 @@
 
   function boot() {
     A.init('kaplya');
+    foam = new global.Foam();
+    // Текстуру подберём после загрузки сохранения — скин ещё неизвестен.
+    foam.load('assets/film.jpg');
+    loadImage('ember', 'assets/ember.png');
+    loadImage('pearl', 'assets/pearl.png');
     core = new global.Core('game');
     core.onResize = layout;
     core.onUpdate = update;
     core.onRender = render;
     core.onPress = onPress;
+    core.onRelease = onRelease;
     core.onVisibility = function (hidden) {
       if (hidden) P.gameplayStop();
       else if (state === 'play') P.gameplayStart();
@@ -2041,6 +2378,7 @@
       })
       .then(function (data) {
         applySave(data);
+        useSkinFilm();
         S.setEnabled(!!save.sound);
         return waitForFont();
       })
@@ -2072,6 +2410,72 @@
         state = 'menu';
         P.ready();
       });
+  }
+
+  /* Единственный след режима съёмки в боевой сборке. Без engine/shot.js
+     условие ложно, и блок не выполняется — наружу ничего лишнего не уезжает.
+
+     Ботов в съёмке нет: сцену расставляем руками и просим отрисовать один
+     кадр. Поэтому она работает и в headless, где игровой цикл не крутится. */
+  if (global.Shot) {
+    global.Shot.attach({
+      C: { FIELD_W: FIELD_W, FIELD_H: FIELD_H, MIN_R: MIN_R, MAX_R: MAX_R,
+           WALL_HALF: WALL_HALF, PEARL_R: PEARL_R, TAU: TAU },
+      getState: function () { return state; },
+      setState: function (v) { state = v; },
+      world: function () {
+        return { drops: drops, hazards: hazards, walls: walls, pearls: pearls,
+                 parts: parts, waves: waves, motes: motes };
+      },
+      clear: function () {
+        drops = []; hazards = []; walls = []; pearls = [];
+        parts = []; waves = []; growing = null; filled = 0;
+      },
+      setup: setupLevel,
+      drop: function (x, y, r) {
+        drops.push({ x: x, y: y, r: r, born: 0 });
+        filled += Math.PI * r * r;
+      },
+      // Растущая капля — главный кадр игры: по ней сразу видно, в чём выбор.
+      grow: function (x, y, r, near) {
+        growing = { x: x, y: y, r: r, tick: 0, near: near || 0 };
+      },
+      ember: function (kind, x, y, vx, vy, r) {
+        var h = { type: kind, x: x, y: y, vx: vx, vy: vy, r: r,
+                  ph: 0, trail: kind === 'comet' ? [] : null };
+        hazards.push(h);
+        return h;
+      },
+      wall: function (x1, y1, x2, y2) {
+        walls.push({ x1: x1, y1: y1, x2: x2, y2: y2 });
+      },
+      pearl: function (x, y) {
+        pearls.push({ x: x, y: y, taken: 0, ph: 0 });
+      },
+      set: function (o) {
+        if (o.level !== undefined) level = o.level;
+        if (o.score !== undefined) score = o.score;
+        if (o.lives !== undefined) lives = o.lives;
+        if (o.best !== undefined) save.best = o.best;
+        if (o.bestLevel !== undefined) save.bestLevel = o.bestLevel;
+        if (o.coins !== undefined) save.coins = o.coins;
+        if (o.skin !== undefined) save.skin = o.skin;
+        if (o.owned !== undefined) save.owned = o.owned;
+        if (o.up !== undefined) save.up = o.up;
+        if (o.target !== undefined) target = o.target;
+        if (o.filled !== undefined) filled = o.filled;
+        if (o.shopTab !== undefined) shopTab = o.shopTab;
+        if (o.hint !== undefined) { hintText = o.hint; hintTime = 9; }
+      },
+      freeze: function () { core.paused = true; },
+      render: function () { render(core.ctx); },
+      // Для видео: симуляция крутится вручную, по кадру за вызов, чтобы
+      // запись не зависела от requestAnimationFrame и повторялась точно.
+      step: function (dt) { update(dt); },
+      place: placeAt,
+      stop: function () { if (growing) freeze(); },
+      startRun: startRun
+    });
   }
 
   if (document.readyState === 'loading') {

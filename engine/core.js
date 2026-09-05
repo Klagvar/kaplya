@@ -192,8 +192,20 @@
       var k = e.code || e.key;
       if (k === 'Space' || k === 'Enter' || k === 'ArrowUp' || k === ' ') {
         e.preventDefault();
+        self._keyDown = true;
         if (self.onPress) self.onPress(-1, -1); // -1 = «нажатие без координат»
       }
+    }, false);
+
+    /* Отпускание клавиши. Нужно играм, где действие длится, пока держат:
+       без него на клавиатуре нельзя выразить «отпустил». Игры, которым
+       удержание не нужно, просто не задают onRelease. */
+    global.addEventListener('keyup', function (e) {
+      var k = e.code || e.key;
+      if (k !== 'Space' && k !== 'Enter' && k !== 'ArrowUp' && k !== ' ') return;
+      if (!self._keyDown) return;
+      self._keyDown = false;
+      if (self.onRelease) self.onRelease(-1, -1);
     }, false);
   };
 
